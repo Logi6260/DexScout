@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Glucose Monitor</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
+      Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    margin: 0;
+    background: #121212;
+    color: white;
+    text-align: center;
+    -webkit-user-select: none; /* Disable selection */
+    user-select: none;
+  }
+  #glucose {
+    font-size: 6rem;
+    font-weight: 900;
+    margin: 0.2em;
+  }
+  #trend {
+    font-size: 3rem;
+    margin-bottom: 0.3em;
+  }
+  #time-since {
+    font-size: 1.2rem;
+    margin-top: 0;
+  }
+  #settings {
+    margin-top: 1em;
+    font-size: 0.9rem;
+    max-width: 320px;
+    width: 90vw;
+  }
+  label {
+    display: block;
+    margin: 0.3em 0 0.1em;
+    font-weight: 600;
+  }
+  input[type="color"] {
+    width: 100%;
+    height: 2em;
+    border: none;
+    padding: 0;
+    margin-bottom: 0.8em;
+    cursor: pointer;
+    background: none;
+  }
+  #error {
+    margin-top: 1em;
+    color: #ff6b6b;
+  }
+</style>
+</head>
+<body>
+
+<h1>Glucose Monitor</h1>
+
+<div id="glucose">--</div>
+<div id="trend">↔️</div>
+<div id="time-since">Last update: --</div>
+
+<div id="settings">
+  <label for="color-low">Low glucose color:</label>
+  <input type="color" id="color-low" value="#ff3b30" />
+
+  <label for="color-range">In-range glucose color:</label>
+  <input type="color" id="color-range" value="#34c759" />
+
+  <label for="color-high">High glucose color:</label>
+  <input type="color" id="color-high" value="#ff9500" />
+</div>
+
+<div id="error"></div>
+
+<script>
+  // Nightscout API URL — replace with your own Nightscout URL!
+  const NIGHTSCOUT_URL = "https://your-nightscout-url.herokuapp.com/api/v1/entries.json?count=1";
+
+  const glucoseEl = document.getElementById("glucose");
+  const trendEl = document.getElementById("trend");
+  const timeSinceEl = document.getElementById("time-since");
+  const errorEl = document.getElementById("error");
+
+  const colorLowInput = document.getElementById("color-low");
+  const colorRangeInput = document.getElementById("color-range");
+  const colorHighInput = document.getElementById("color-high");
+
+  let glucoseValue = null;
+  let lastDate = null;
+
+  // Map Dexcom trend values to arrows (can differ per setup)
+  const trendArrows = {
+    1: "↘️", // Double Down
+    2: "↘",  // Single Down
+    3: "↔️", // Flat
+    4: "↗",  // Single Up
+    5: "↗️", // Double Up
+    0: "?"   // None/unknown
+  };
+
+  function updateColors(value) {
+    // Glucose thresholds in mmol/L
+    const lowThreshold = 4.0;
+    const highThreshold = 10.0;
+
+    if (value < lowThreshold) {
+      glucoseEl.style.color = colorLowInput.value;
+    } else if (value > highThreshold) {
+      glucoseEl.style.color = colorHighInput.value;
+    } else {
+      glucoseEl.style.color = colorRangeInput.value;
+    }
+  }
+
+  function formatTimeSince(dateStr) {
+    if (!dateStr) return "--";
+
+    const now = new Date();
+    const date = new Date(dateStr);
+    const diffMs = now - date;
+    const diffMins = Math.floor(diffMs / 60000);
+
+    if (diffMins < 1) return "Just now";
+    if (diffMins === 1) return "1 minute ago";
+    if (diffMins < 60) return `${diffMins} minutes ago`;
+    const diffHours = Math.floor(diffMins / 60);
+    if (diffHours === 1) return "1 hour ago";
+    return `${diffHours} hours ago`;
+  }
+
+  async function fetchGlucose() {
+    errorEl.textContent = "";
+    try {
+      const resp = await fetch(NIGHTSCOUT_URL);
+      if (!resp.ok) throw new Error("Network response was not OK");
+
+      const data = await resp.json();
+      if (!data || data.length === 0) {
+        throw new Error("No data returned");
+      }
+
+      const entry = data[0];
+      // glucose in mg/dL by default, convert to mmol/L
+      const glucoseMgdl = entry.sgv;
+      glucoseValue = (glucoseMgdl / 18).toFixed(1);
+
+      glucoseEl.textContent = glucoseValue;
+      trendEl.textContent = trendArrows[entry.trend] || "↔️";
+      lastDate = entry.dateString || entry.date;
+
+      timeSinceEl.textContent = "Last update: " + formatTimeSince(lastDate);
+      updateColors(glucoseValue);
+    } catch (e) {
+      errorEl.textContent = "Error loading data";
+      glucoseEl.textContent = "--";
+      trendEl.textContent = "↔️";
+      timeSinceEl.textContent = "Last update: --";
+      console.error(e);
+    }
+  }
+
+  // Initial fetch
+  fetchGlucose();
+
+  // Refresh every 5 minutes (300000 ms)
+  setInterval(fetchGlucose, 300000);
+
+  // Update colors when user changes inputs
+  [colorLowInput, colorRangeInput, colorHighInput].forEach((input) => {
+    input.addEventListener("input", () => {
+      if (glucoseValue !== null) updateColors(glucoseValue);
+    });
+  });
+
+  // Prevent sleep: Keep screen awake on supported browsers
+  if ("wakeLock" in navigator) {
+    let wakeLock = null;
+    const requestWakeLock = async () => {
+      try {
+        wakeLock = await navigator.wakeLock.request("screen");
+        wakeLock.addEventListener("release", () => {
+          console.log("Wake Lock was released");
+        });
+        console.log("Wake Lock is active");
+      } catch (err) {
+        console.error(`${err.name}, ${err.message}`);
+      }
+    };
+    requestWakeLock();
+
+    document.addEventListener("visibilitychange", () => {
+      if (wakeLock !== null && document.visibilityState === "visible") {
+        requestWakeLock();
+      }
+    });
+  }
+</script>
+
+</body>
+</html>
